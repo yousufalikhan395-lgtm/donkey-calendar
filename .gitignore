@@ -19,3 +19,4 @@ pubspec.lock
 __pycache__/
 *.pyc
 .env
+ios/Flutter/ephemeral/
