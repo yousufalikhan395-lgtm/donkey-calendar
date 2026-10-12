@@ -12,10 +12,12 @@ class SettingsScreen extends StatefulWidget {
   final StorageService storage;
   final CalendarRepository repo;
   final ApiService api;
+  final String provider;
   final List<BotModel> bots;
   final BotModel? currentBot;
   final ValueChanged<BotModel> onBotChanged;
   final ValueChanged<String> onKeyChanged;
+  final ValueChanged<String> onProviderChanged;
 
   const SettingsScreen({
     super.key,
@@ -23,10 +25,12 @@ class SettingsScreen extends StatefulWidget {
     required this.storage,
     required this.repo,
     required this.api,
+    required this.provider,
     required this.bots,
     required this.currentBot,
     required this.onBotChanged,
     required this.onKeyChanged,
+    required this.onProviderChanged,
   });
 
   @override
@@ -208,6 +212,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
         body: ListView(
           padding: const EdgeInsets.fromLTRB(20, 4, 20, 40),
           children: [
+            _section('AI PROVIDER'),
+            _card(Column(children: [
+              RadioListTile<String>(
+                title: const Text('LongCat website',
+                    style: TextStyle(
+                        fontFamily: 'Inter', fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.text)),
+                subtitle: const Text('Free guest chat on longcat.ai, no key needed',
+                    style: TextStyle(fontFamily: 'Inter', fontSize: 12, color: AppColors.muted)),
+                value: 'website',
+                groupValue: widget.provider,
+                activeColor: AppColors.accent,
+                onChanged: (v) => v != null ? widget.onProviderChanged(v) : null,
+              ),
+              const Divider(height: 1, indent: 20, endIndent: 20),
+              RadioListTile<String>(
+                title: const Text('LongCat API key',
+                    style: TextStyle(
+                        fontFamily: 'Inter', fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.text)),
+                subtitle: const Text('Official API, faster and more reliable',
+                    style: TextStyle(fontFamily: 'Inter', fontSize: 12, color: AppColors.muted)),
+                value: 'apikey',
+                groupValue: widget.provider,
+                activeColor: AppColors.accent,
+                onChanged: (v) => v != null ? widget.onProviderChanged(v) : null,
+              ),
+            ])),
             _section('LONGCAT API KEY'),
             _card(Padding(
               padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),

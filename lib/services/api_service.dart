@@ -4,9 +4,13 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
-/// App-facing AI service. Calls LongCat's official OpenAI-compatible API
-/// (https://api.longcat.chat) straight from the phone — no middleman.
-/// Needs a user API key (from longcat.ai/platform), entered in Settings.
+import 'longcat_web_service.dart';
+
+/// App-facing AI service with two independent backends:
+/// - website (default): drives longcat.ai/chat guest session in the
+///   phone's own hidden browser. No key needed.
+/// - apikey: LongCat official OpenAI-compatible API with a user key.
+/// Method signatures are unchanged so callers are unaffected.
 class ApiService {
   static const _base = 'https://api.longcat.chat/openai/v1';
 
@@ -47,19 +51,34 @@ class ApiService {
   ];
 
   String _apiKey = '';
+  String _mode = 'website'; // website | apikey
+  LongcatWebService? _web;
   bool _cancelFlag = false;
   http.Client? _client;
 
   void setKey(String key) => _apiKey = key.trim();
+  void setMode(String mode) => _mode = mode;
+  String get mode => _mode;
+  void attachWeb(LongcatWebService web) => _web = web;
+
+  LongcatWebService get _w {
+    final w = _web;
+    if (w == null) throw Exception('AI backend not ready yet.');
+    return w;
+  }
 
   Map<String, String> get _headers => {
         'Authorization': 'Bearer $_apiKey',
         'Content-Type': 'application/json',
       };
 
-  /// No handshake needed; key presence is checked per request so the
-  /// app shell (calendar, reminders) works even before a key is added.
-  Future<void> auth() async {}
+  /// No handshake needed; readiness is checked per request so the
+  /// app shell (calendar, reminders) works even before setup.
+  Future<void> auth() async {
+    if (_mode == 'website') {
+      await _w.ensureReady();
+    }
+  }
 
   Future<List<Map<String, dynamic>>> fetchBots() async =>
       _bots.map((b) => Map<String, dynamic>.from(b)).toList();
@@ -109,6 +128,28 @@ class ApiService {
     String? chatId,
     File? imageFile,
   }) async* {
+    if (_mode == 'website') {
+      List<int>? bytes;
+      if (imageFile != null) {
+        try {
+          bytes = await imageFile.readAsBytes();
+        } catch (_) {}
+      }
+      final (system, user) = splitPrompt(message);
+      final prompt = system.isEmpty ? user : '$system\n\nUser message: $user';
+      final ext = imageFile?.path.split('.').last.toLowerCase() ?? 'jpg';
+      yield* _w.send(
+        message: prompt,
+        imageBytes: bytes,
+        imageName: imageFile != null ? imageFile.path.split('/').last : 'photo.jpg',
+        imageMime: ext == 'png'
+            ? 'image/png'
+            : ext == 'webp'
+                ? 'image/webp'
+                : 'image/jpeg',
+      );
+      return;
+    }
     if (_apiKey.isEmpty) {
       throw Exception(
           'Add your LongCat API key in Settings → AI Model to start chatting.');
@@ -215,9 +256,12 @@ class ApiService {
     _cancelFlag = true;
     _client?.close();
     _client = null;
+    _web?.stop();
   }
 
-  void newChat() {}
+  void newChat() {
+    _web?.newChat();
+  }
 
   String? get currentChatId => null;
   bool get isAuthed => true;

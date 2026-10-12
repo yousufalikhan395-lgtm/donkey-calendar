@@ -36,6 +36,7 @@ void main() {
   });
 
   test('missing key fails fast with guidance', () async {
+    api.setMode('apikey');
     api.setKey('');
     expect(
       api.sendMessage(
@@ -45,6 +46,7 @@ void main() {
   });
 
   test('invalid key surfaces API auth error', () async {
+    api.setMode('apikey');
     api.setKey('test-invalid-key-123');
     await expectLater(
       api.sendMessage(

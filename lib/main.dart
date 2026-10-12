@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 import 'db/app_database.dart';
 import 'models/bot_model.dart';
 import 'screens/ai_chat_screen.dart';
@@ -8,6 +9,7 @@ import 'screens/settings_screen.dart';
 import 'services/api_service.dart';
 import 'services/calendar_repository.dart';
 import 'services/calendar_tool_executor.dart';
+import 'services/longcat_web_service.dart';
 import 'services/reminder_scheduler.dart';
 import 'services/storage_service.dart';
 import 'theme.dart';
@@ -41,21 +43,30 @@ class _AppShellState extends State<_AppShell> {
   late final ReminderScheduler _reminders = ReminderScheduler();
   late final CalendarToolExecutor _executor =
       CalendarToolExecutor(repo: _repo, reminders: _reminders);
+  late final LongcatWebService _web = LongcatWebService();
+  late final WebViewController _webCtrl = WebViewController()
+    ..setJavaScriptMode(JavaScriptMode.unrestricted)
+    ..setBackgroundColor(const Color(0x00000000))
+    ..loadRequest(Uri.parse(LongcatWebService.homeUrl));
 
   int _tab = 0;
   bool _ready = false;
   String? _error;
   List<BotModel> _bots = [];
   BotModel? _bot;
+  String _provider = 'website';
 
   @override
   void initState() {
     super.initState();
+    _web.attach(_webCtrl);
+    _api.attachWeb(_web);
     _boot();
   }
 
   Future<void> _boot() async {
     try {
+      _api.setMode(await _storage.loadProvider());
       _api.setKey(await _storage.loadApiKey() ?? '');
       await _api.auth();
       final raw = await _api.fetchBots();
@@ -78,6 +89,7 @@ class _AppShellState extends State<_AppShell> {
       setState(() {
         _bots = bots;
         _bot = sel;
+        _provider = _api.mode;
         _ready = true;
       });
     } catch (e) {
@@ -115,7 +127,8 @@ class _AppShellState extends State<_AppShell> {
   @override
   Widget build(BuildContext context) {
     if (_error != null) {
-      return Container(
+      return Stack(children: [
+        Container(
           decoration: const BoxDecoration(gradient: AppColors.bgGradient),
           child: Scaffold(
             backgroundColor: Colors.transparent,
@@ -145,7 +158,9 @@ class _AppShellState extends State<_AppShell> {
               ),
             ),
           ),
-        );
+        ),
+        _HiddenWeb(controller: _webCtrl),
+      ]);
     }
 
     Widget content;    if (!_ready) {
@@ -163,10 +178,16 @@ class _AppShellState extends State<_AppShell> {
             storage: _storage,
             repo: _repo,
             api: _api,
+            provider: _provider,
             bots: _bots,
             currentBot: _bot,
             onBotChanged: _selectBot,
             onKeyChanged: (k) => _api.setKey(k),
+            onProviderChanged: (p) {
+              _storage.saveProvider(p);
+              _api.setMode(p);
+              setState(() => _provider = p);
+            },
           ),
         ],
       ),
@@ -191,7 +212,32 @@ class _AppShellState extends State<_AppShell> {
       );
     }
 
-    return content;
+    // Hidden browser session: opens with the app, lives until it closes.
+    // Powers website provider mode (longcat.ai guest chat).
+    return Stack(children: [
+      content,
+      _HiddenWeb(controller: _webCtrl),
+    ]);
+  }
+}
+
+/// 1px, fully hidden platform WebView hosting the AI browser session.
+class _HiddenWeb extends StatelessWidget {
+  final WebViewController controller;
+  const _HiddenWeb({required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      left: 0,
+      top: 0,
+      width: 1,
+      height: 1,
+      child: Opacity(
+        opacity: 0.0,
+        child: IgnorePointer(child: WebViewWidget(controller: controller)),
+      ),
+    );
   }
 }
 
