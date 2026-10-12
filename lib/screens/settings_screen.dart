@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/bot_model.dart';
+import '../services/api_service.dart';
 import '../services/calendar_repository.dart';
 import '../services/reminder_scheduler.dart';
 import '../services/storage_service.dart';
@@ -10,18 +11,22 @@ class SettingsScreen extends StatefulWidget {
   final ReminderScheduler reminders;
   final StorageService storage;
   final CalendarRepository repo;
+  final ApiService api;
   final List<BotModel> bots;
   final BotModel? currentBot;
   final ValueChanged<BotModel> onBotChanged;
+  final ValueChanged<String> onKeyChanged;
 
   const SettingsScreen({
     super.key,
     required this.reminders,
     required this.storage,
     required this.repo,
+    required this.api,
     required this.bots,
     required this.currentBot,
     required this.onBotChanged,
+    required this.onKeyChanged,
   });
 
   @override
@@ -30,6 +35,9 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _defaultReminder = true;
+  late final TextEditingController _keyCtrl = TextEditingController();
+  String? _keyStatus;
+  bool _testingKey = false;
 
   @override
   void initState() {
@@ -37,6 +45,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
     widget.storage.loadDefaultReminder().then((v) {
       if (mounted) setState(() => _defaultReminder = v);
     });
+    widget.storage.loadApiKey().then((v) {
+      if (mounted && v != null) _keyCtrl.text = v;
+    });
+  }
+
+  @override
+  void dispose() {
+    _keyCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _saveKey() async {
+    final key = _keyCtrl.text.trim();
+    await widget.storage.saveApiKey(key);
+    widget.onKeyChanged(key);
+    if (mounted) {
+      setState(() => _keyStatus = key.isEmpty ? null : 'Key saved.');
+    }
+  }
+
+  Future<void> _testKey() async {
+    setState(() {
+      _testingKey = true;
+      _keyStatus = null;
+    });
+    final err = await widget.api.testKey(_keyCtrl.text.trim());
+    if (mounted) {
+      setState(() {
+        _testingKey = false;
+        _keyStatus = err ?? 'Key works. You are connected.';
+      });
+    }
   }
 
   void _showModelSheet() {
@@ -168,6 +208,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
         body: ListView(
           padding: const EdgeInsets.fromLTRB(20, 4, 20, 40),
           children: [
+            _section('ZHIPU API KEY'),
+            _card(Padding(
+              padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text(
+                    'Get a free key at open.bigmodel.cn, then paste it here. It never leaves your phone except to call Zhipu.',
+                    style: TextStyle(fontFamily: 'Inter', fontSize: 12.5, height: 1.5, color: AppColors.muted)),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _keyCtrl,
+                  obscureText: true,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  style: const TextStyle(fontFamily: 'JetBrainsMono', fontSize: 13, color: AppColors.text),
+                  decoration: const InputDecoration(hintText: 'Paste API key…'),
+                  onSubmitted: (_) => _saveKey(),
+                ),
+                const SizedBox(height: 10),
+                Row(children: [
+                  FilledButton(onPressed: _saveKey, child: const Text('Save')),
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    onPressed: _testingKey ? null : _testKey,
+                    child: Text(_testingKey ? 'Testing…' : 'Test'),
+                  ),
+                ]),
+                if (_keyStatus != null) ...[
+                  const SizedBox(height: 8),
+                  Text(_keyStatus!,
+                      style: TextStyle(
+                          fontFamily: 'Inter',
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: _keyStatus!.contains('works')
+                              ? AppColors.accent
+                              : const Color(0xFF9A3B22))),
+                ],
+              ]),
+            )),
             _section('AI MODEL'),
             _card(ListTile(
               leading: Container(

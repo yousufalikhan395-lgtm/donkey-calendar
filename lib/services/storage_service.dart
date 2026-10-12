@@ -49,4 +49,14 @@ class StorageService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('default_reminder', v);
   }
+
+  Future<String?> loadApiKey() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('zhipu_api_key');
+  }
+
+  Future<void> saveApiKey(String v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('zhipu_api_key', v);
+  }
 }

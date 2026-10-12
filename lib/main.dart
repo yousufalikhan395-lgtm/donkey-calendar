@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:webview_flutter/webview_flutter.dart';
 import 'db/app_database.dart';
 import 'models/bot_model.dart';
 import 'screens/ai_chat_screen.dart';
@@ -9,7 +8,6 @@ import 'screens/settings_screen.dart';
 import 'services/api_service.dart';
 import 'services/calendar_repository.dart';
 import 'services/calendar_tool_executor.dart';
-import 'services/chatglm_web_service.dart';
 import 'services/reminder_scheduler.dart';
 import 'services/storage_service.dart';
 import 'theme.dart';
@@ -43,11 +41,6 @@ class _AppShellState extends State<_AppShell> {
   late final ReminderScheduler _reminders = ReminderScheduler();
   late final CalendarToolExecutor _executor =
       CalendarToolExecutor(repo: _repo, reminders: _reminders);
-  late final ChatglmWebService _web = ChatglmWebService();
-  late final WebViewController _webCtrl = WebViewController()
-    ..setJavaScriptMode(JavaScriptMode.unrestricted)
-    ..setBackgroundColor(const Color(0x00000000))
-    ..loadRequest(Uri.parse(ChatglmWebService.homeUrl));
 
   int _tab = 0;
   bool _ready = false;
@@ -58,13 +51,12 @@ class _AppShellState extends State<_AppShell> {
   @override
   void initState() {
     super.initState();
-    _web.attach(_webCtrl);
-    _api.attachWeb(_web);
     _boot();
   }
 
   Future<void> _boot() async {
     try {
+      _api.setKey(await _storage.loadApiKey() ?? '');
       await _api.auth();
       final raw = await _api.fetchBots();
       final bots = raw.map((b) => BotModel.fromJson(b)).toList();
@@ -123,8 +115,7 @@ class _AppShellState extends State<_AppShell> {
   @override
   Widget build(BuildContext context) {
     if (_error != null) {
-      return Stack(children: [
-        Container(
+      return Container(
           decoration: const BoxDecoration(gradient: AppColors.bgGradient),
           child: Scaffold(
             backgroundColor: Colors.transparent,
@@ -154,13 +145,10 @@ class _AppShellState extends State<_AppShell> {
               ),
             ),
           ),
-        ),
-        _HiddenWeb(controller: _webCtrl),
-      ]);
+        );
     }
 
-    Widget content;
-    if (!_ready) {
+    Widget content;    if (!_ready) {
       content = const _BootScreen();
     } else {
       content = Scaffold(
@@ -174,9 +162,11 @@ class _AppShellState extends State<_AppShell> {
             reminders: _reminders,
             storage: _storage,
             repo: _repo,
+            api: _api,
             bots: _bots,
             currentBot: _bot,
             onBotChanged: _selectBot,
+            onKeyChanged: (k) => _api.setKey(k),
           ),
         ],
       ),
@@ -201,31 +191,7 @@ class _AppShellState extends State<_AppShell> {
       );
     }
 
-    // Hidden browser session: opens with the app, lives until it closes.
-    return Stack(children: [
-      content,
-      _HiddenWeb(controller: _webCtrl),
-    ]);
-  }
-}
-
-/// 1px, fully hidden platform WebView hosting the ChatGLM session.
-class _HiddenWeb extends StatelessWidget {
-  final WebViewController controller;
-  const _HiddenWeb({required this.controller});
-
-  @override
-  Widget build(BuildContext context) {
-    return Positioned(
-      left: 0,
-      top: 0,
-      width: 1,
-      height: 1,
-      child: Opacity(
-        opacity: 0.0,
-        child: IgnorePointer(child: WebViewWidget(controller: controller)),
-      ),
-    );
+    return content;
   }
 }
 
