@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 import 'db/app_database.dart';
 import 'models/bot_model.dart';
 import 'screens/ai_chat_screen.dart';
@@ -8,6 +9,7 @@ import 'screens/settings_screen.dart';
 import 'services/api_service.dart';
 import 'services/calendar_repository.dart';
 import 'services/calendar_tool_executor.dart';
+import 'services/chatglm_web_service.dart';
 import 'services/reminder_scheduler.dart';
 import 'services/storage_service.dart';
 import 'theme.dart';
@@ -41,6 +43,11 @@ class _AppShellState extends State<_AppShell> {
   late final ReminderScheduler _reminders = ReminderScheduler();
   late final CalendarToolExecutor _executor =
       CalendarToolExecutor(repo: _repo, reminders: _reminders);
+  late final ChatglmWebService _web = ChatglmWebService();
+  late final WebViewController _webCtrl = WebViewController()
+    ..setJavaScriptMode(JavaScriptMode.unrestricted)
+    ..setBackgroundColor(const Color(0x00000000))
+    ..loadRequest(Uri.parse(ChatglmWebService.homeUrl));
 
   int _tab = 0;
   bool _ready = false;
@@ -51,6 +58,8 @@ class _AppShellState extends State<_AppShell> {
   @override
   void initState() {
     super.initState();
+    _web.attach(_webCtrl);
+    _api.attachWeb(_web);
     _boot();
   }
 
@@ -114,42 +123,47 @@ class _AppShellState extends State<_AppShell> {
   @override
   Widget build(BuildContext context) {
     if (_error != null) {
-      return Container(
-        decoration: const BoxDecoration(gradient: AppColors.bgGradient),
-        child: Scaffold(
-          backgroundColor: Colors.transparent,
-          body: Center(
-            child: Padding(
-              padding: const EdgeInsets.all(32),
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                const Text('Could not connect',
-                    style: TextStyle(
-                        fontFamily: 'Inter',
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.text)),
-                const SizedBox(height: 8),
-                Text(_error!,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontFamily: 'Inter', color: AppColors.muted)),
-                const SizedBox(height: 20),
-                FilledButton(
-                  onPressed: () {
-                    setState(() => _error = null);
-                    _boot();
-                  },
-                  child: const Text('Retry'),
-                ),
-              ]),
+      return Stack(children: [
+        Container(
+          decoration: const BoxDecoration(gradient: AppColors.bgGradient),
+          child: Scaffold(
+            backgroundColor: Colors.transparent,
+            body: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  const Text('Could not connect',
+                      style: TextStyle(
+                          fontFamily: 'Inter',
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.text)),
+                  const SizedBox(height: 8),
+                  Text(_error!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontFamily: 'Inter', color: AppColors.muted)),
+                  const SizedBox(height: 20),
+                  FilledButton(
+                    onPressed: () {
+                      setState(() => _error = null);
+                      _boot();
+                    },
+                    child: const Text('Retry'),
+                  ),
+                ]),
+              ),
             ),
           ),
         ),
-      );
+        _HiddenWeb(controller: _webCtrl),
+      ]);
     }
 
-    if (!_ready) return const _BootScreen();
-
-    return Scaffold(
+    Widget content;
+    if (!_ready) {
+      content = const _BootScreen();
+    } else {
+      content = Scaffold(
       extendBody: true,
       body: IndexedStack(
         index: _tab,
@@ -183,6 +197,33 @@ class _AppShellState extends State<_AppShell> {
               selectedIcon: Icon(Icons.settings),
               label: 'Settings'),
         ],
+      ),
+      );
+    }
+
+    // Hidden browser session: opens with the app, lives until it closes.
+    return Stack(children: [
+      content,
+      _HiddenWeb(controller: _webCtrl),
+    ]);
+  }
+}
+
+/// 1px, fully hidden platform WebView hosting the ChatGLM session.
+class _HiddenWeb extends StatelessWidget {
+  final WebViewController controller;
+  const _HiddenWeb({required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      left: 0,
+      top: 0,
+      width: 1,
+      height: 1,
+      child: Opacity(
+        opacity: 0.0,
+        child: IgnorePointer(child: WebViewWidget(controller: controller)),
       ),
     );
   }
