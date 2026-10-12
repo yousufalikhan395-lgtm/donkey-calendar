@@ -4,12 +4,47 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
-/// App-facing AI service. Calls Zhipu's official OpenAI-compatible API
-/// (https://open.bigmodel.cn) straight from the phone — no middleman,
-/// no browser hacks. Needs a user API key (free tier), entered in Settings.
+/// App-facing AI service. Calls LongCat's official OpenAI-compatible API
+/// (https://api.longcat.chat) straight from the phone — no middleman.
+/// Needs a user API key (from longcat.ai/platform), entered in Settings.
 class ApiService {
-  static const _base = 'https://open.bigmodel.cn/api/paas/v4';
-  static const visionModel = 'glm-4v-flash';
+  static const _base = 'https://api.longcat.chat/openai/v1';
+
+  static const _bots = [
+    {
+      'bot_id': 'longcat-flash-chat',
+      'name': 'LongCat Flash',
+      'service': 'longcat',
+      'model': 'LongCat-Flash-Chat',
+      'is_vip': false,
+      'type': 'chat',
+      'mime_support': 'image/*',
+      'max_files': 1,
+      'stream': true,
+    },
+    {
+      'bot_id': 'longcat-25-preview',
+      'name': 'LongCat 2.5',
+      'service': 'longcat',
+      'model': 'LongCat-2.5-Preview',
+      'is_vip': false,
+      'type': 'chat',
+      'mime_support': 'image/*',
+      'max_files': 1,
+      'stream': true,
+    },
+    {
+      'bot_id': 'longcat-20',
+      'name': 'LongCat 2.0',
+      'service': 'longcat',
+      'model': 'LongCat-2.0',
+      'is_vip': false,
+      'type': 'chat',
+      'mime_support': 'image/*',
+      'max_files': 1,
+      'stream': true,
+    },
+  ];
 
   String _apiKey = '';
   bool _cancelFlag = false;
@@ -26,41 +61,8 @@ class ApiService {
   /// app shell (calendar, reminders) works even before a key is added.
   Future<void> auth() async {}
 
-  Future<List<Map<String, dynamic>>> fetchBots() async => [
-        {
-          'bot_id': 'glm-4-flash',
-          'name': 'GLM-4-Flash',
-          'service': 'zhipu',
-          'model': 'glm-4-flash',
-          'is_vip': false,
-          'type': 'chat',
-          'mime_support': 'image/*',
-          'max_files': 1,
-          'stream': true,
-        },
-        {
-          'bot_id': 'glm-4',
-          'name': 'GLM-4',
-          'service': 'zhipu',
-          'model': 'glm-4',
-          'is_vip': false,
-          'type': 'chat',
-          'mime_support': 'image/*',
-          'max_files': 1,
-          'stream': true,
-        },
-        {
-          'bot_id': 'glm-4v-flash',
-          'name': 'GLM-4V-Flash',
-          'service': 'zhipu',
-          'model': 'glm-4v-flash',
-          'is_vip': false,
-          'type': 'chat',
-          'mime_support': 'image/*',
-          'max_files': 1,
-          'stream': true,
-        },
-      ];
+  Future<List<Map<String, dynamic>>> fetchBots() async =>
+      _bots.map((b) => Map<String, dynamic>.from(b)).toList();
 
   /// Ping the API to validate the stored key. Returns null when OK,
   /// otherwise a human-readable error.
@@ -81,18 +83,22 @@ class ApiService {
     }
   }
 
-  /// Flatten our internal [SYSTEM]/[USER] wrapper into plain prompt text.
-  String toPrompt(String message) {
-    if (!message.contains('[SYSTEM]')) return message;
+  /// Split our internal [SYSTEM]/[USER] wrapper into proper roles.
+  /// Returns (system, user).
+  (String, String) splitPrompt(String message) {
+    if (!message.contains('[SYSTEM]')) return ('', message);
     final sysMatch =
         RegExp(r'\[SYSTEM\]\s*(.*?)\s*\[/SYSTEM\]', dotAll: true).firstMatch(message);
     final userMatch =
         RegExp(r'\[USER\]\s*(.*)', dotAll: true).firstMatch(message);
-    final sys = sysMatch?.group(1)?.trim() ?? '';
-    final user = userMatch?.group(1)?.trim() ?? message;
-    if (sys.isEmpty) return user;
-    return '$sys\n\nUser message: $user';
+    return (
+      sysMatch?.group(1)?.trim() ?? '',
+      userMatch?.group(1)?.trim() ?? message,
+    );
   }
+
+  /// Calendar extraction wants fast, deterministic output.
+  bool _thinkingFor(String model) => model == 'LongCat-2.5-Preview';
 
   Stream<String> sendMessage({
     required String message,
@@ -105,14 +111,17 @@ class ApiService {
   }) async* {
     if (_apiKey.isEmpty) {
       throw Exception(
-          'Add your Zhipu API key in Settings → AI Model to start chatting.');
+          'Add your LongCat API key in Settings → AI Model to start chatting.');
     }
     _cancelFlag = false;
     _client?.close();
     _client = http.Client();
 
-    String useModel = model.isNotEmpty ? model : 'glm-4-flash';
-    Object content = toPrompt(message);
+    String useModel = model.isNotEmpty ? model : 'LongCat-Flash-Chat';
+    final (system, user) = splitPrompt(message);
+    final messages = <Map<String, dynamic>>[
+      if (system.isNotEmpty) {'role': 'system', 'content': system},
+    ];
     if (imageFile != null) {
       final bytes = await imageFile.readAsBytes();
       if (bytes.length > 8 * 1024 * 1024) {
@@ -124,25 +133,29 @@ class ApiService {
           : ext == 'webp'
               ? 'image/webp'
               : 'image/jpeg';
-      useModel = visionModel; // images always route to the vision model
-      content = [
-        {'type': 'text', 'text': toPrompt(message)},
-        {
-          'type': 'image_url',
-          'image_url': {'url': 'data:$mime;base64,${base64Encode(bytes)}'}
-        },
-      ];
+      useModel = 'LongCat-2.5-Preview'; // flagship model for image input
+      messages.add({
+        'role': 'user',
+        'content': [
+          {'type': 'text', 'text': user},
+          {
+            'type': 'image_url',
+            'image_url': {'url': 'data:$mime;base64,${base64Encode(bytes)}'}
+          },
+        ],
+      });
+    } else {
+      messages.add({'role': 'user', 'content': user});
     }
 
     final req = http.Request('POST', Uri.parse('$_base/chat/completions'))
       ..headers.addAll(_headers)
       ..body = jsonEncode({
         'model': useModel,
-        'messages': [
-          {'role': 'user', 'content': content}
-        ],
+        'messages': messages,
         'stream': true,
         'temperature': 0.3,
+        'thinking': {'type': _thinkingFor(useModel) ? 'enabled' : 'disabled'},
       });
 
     http.StreamedResponse resp;
@@ -170,13 +183,20 @@ class ApiService {
       if (raw.isEmpty || !raw.startsWith('data:')) continue;
       raw = raw.substring(5).trim();
       if (raw == '[DONE]') return;
-      try {
-        final j = jsonDecode(raw) as Map<String, dynamic>;
-        final choices = j['choices'] as List?;
-        final delta = (choices?.firstOrNull as Map?)?['delta'] as Map?;
-        final text = delta?['content']?.toString() ?? '';
-        if (text.isNotEmpty) yield text;
-      } catch (_) {}
+      final chunk = parseSseChunk(raw);
+      if (chunk.isNotEmpty) yield chunk;
+    }
+  }
+
+  /// Parse one SSE `data:` payload into text. Pure — unit tested.
+  static String parseSseChunk(String raw) {
+    try {
+      final j = jsonDecode(raw) as Map<String, dynamic>;
+      final choices = j['choices'] as List?;
+      final delta = (choices?.firstOrNull as Map?)?['delta'] as Map?;
+      return delta?['content']?.toString() ?? '';
+    } catch (_) {
+      return '';
     }
   }
 

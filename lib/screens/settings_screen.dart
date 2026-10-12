@@ -208,12 +208,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
         body: ListView(
           padding: const EdgeInsets.fromLTRB(20, 4, 20, 40),
           children: [
-            _section('ZHIPU API KEY'),
+            _section('LONGCAT API KEY'),
             _card(Padding(
               padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Text(
-                    'Get a free key at open.bigmodel.cn, then paste it here. It never leaves your phone except to call Zhipu.',
+                    'Get a free key at longcat.ai/platform, then paste it here. It never leaves your phone except to call LongCat.',
                     style: TextStyle(fontFamily: 'Inter', fontSize: 12.5, height: 1.5, color: AppColors.muted)),
                 const SizedBox(height: 10),
                 TextField(

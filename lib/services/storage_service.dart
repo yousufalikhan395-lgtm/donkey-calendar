@@ -52,11 +52,13 @@ class StorageService {
 
   Future<String?> loadApiKey() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('zhipu_api_key');
+    return prefs.getString('longcat_api_key') ??
+        prefs.getString('zhipu_api_key'); // legacy
   }
 
   Future<void> saveApiKey(String v) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('zhipu_api_key', v);
+    await prefs.setString('longcat_api_key', v);
+    await prefs.remove('zhipu_api_key');
   }
 }
