@@ -82,7 +82,11 @@ def extract_tool_call(text):
 
 def main():
     message = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else "mam said leetcode problems on 9th"
-    from playwright.sync_api import sync_playwright
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print("playwright not installed. Run: /tmp/chatglm-env/bin/python3 tools/longcat_web_test.py ...")
+        return 3
     with sync_playwright() as pw:
         b = pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
         pg = b.new_page(
