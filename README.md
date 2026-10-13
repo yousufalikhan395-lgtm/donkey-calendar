@@ -18,7 +18,7 @@ extracts every exam for your confirmation.
 - **Local-first storage** — events live in an on-device Drift/SQLite database, no cloud sync
 - **Proactive reminders** — local notifications (9 AM day-before for all-day, 1 hour before timed events)
 - **Custom calendar** — month grid with event dots, day agenda, manual add/edit/complete/delete
-- **Multi-model AI** — switch models from Settings; vision-capable bots handle images
+- **Multi-model AI** — Auto (live streaming), GPT-5, GPT-4o, Claude 4.5, Gemini 3, Grok 4.1, DeepSeek R1; timetable photos via staged image analysis
 - **Light green theme** — fresh pastel UI, separate identity from Donkey Chat
 
 ## Project structure
@@ -30,7 +30,7 @@ lib/
   db/                     Drift database (schema v2) + CalendarEvents table
   models/                 BotModel, ChatMessage
   services/
-    api_service.dart      Donkey Chat backend client (auth, bots, streaming)
+    api_service.dart      OpenChat backend client (AES envelope, SSE stream, vision pipeline)
     calendar_repository.dart  Event CRUD
     calendar_prompt_builder.dart  Hidden calendar system prompt
     tool_call_parser.dart AI <tool_call> XML/JSON parsing
@@ -55,9 +55,8 @@ flutter analyze
 flutter build apk --release   # build/app/outputs/flutter-apk/app-release.apk
 ```
 
-> **Note:** `lib/services/api_service.dart` contains embedded backend
-> credentials. Rotate them before distributing a public build.
-
+> **Note:** the AI backend key in `lib/services/api_service.dart` is a public
+> client key reverse-engineered from a free app — treat it as replaceable.
 ## Release
 
 Download the latest APK from

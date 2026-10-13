@@ -50,25 +50,4 @@ class StorageService {
     await prefs.setBool('default_reminder', v);
   }
 
-  Future<String?> loadApiKey() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('longcat_api_key') ??
-        prefs.getString('zhipu_api_key'); // legacy
-  }
-
-  Future<void> saveApiKey(String v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('longcat_api_key', v);
-    await prefs.remove('zhipu_api_key');
-  }
-
-  Future<String> loadProvider() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('ai_provider') ?? 'website';
-  }
-
-  Future<void> saveProvider(String v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('ai_provider', v);
-  }
 }

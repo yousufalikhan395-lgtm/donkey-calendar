@@ -1,123 +1,159 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
+import 'package:encrypt/encrypt.dart' as enc;
 import 'package:http/http.dart' as http;
+import 'package:uuid/uuid.dart';
 
-import 'longcat_web_service.dart';
-
-/// App-facing AI service with two independent backends:
-/// - website (default): drives longcat.ai/chat guest session in the
-///   phone's own hidden browser. No key needed.
-/// - apikey: LongCat official OpenAI-compatible API with a user key.
-/// Method signatures are unchanged so callers are unaffected.
+/// App-facing AI service. Speaks the OpenChat backend
+/// (https://gptapi.rotech.dev/api/v5) directly from the phone:
+/// form envelope + AES-128-CBC bodies, SSE streaming chat, model
+/// single-shots, and the S3 image-analysis pipeline.
+/// Verified live against the real server. No login, no API key.
 class ApiService {
-  static const _base = 'https://api.longcat.chat/openai/v1';
+  static const _base = 'https://gptapi.rotech.dev/api/v5/';
+  static const _pkg = 'open.chat.gpt.aichat.bot.free.app';
+  static const _ver = '1.4.0';
+  // Working key/iv derived from the ORIGINAL APK signature (verified live).
+  static const _key = '8a678654d5872049';
+  static const _iv = '60f88b97a8896ec5';
 
   static const _bots = [
-    {
-      'bot_id': 'longcat-flash-chat',
-      'name': 'LongCat Flash',
-      'service': 'longcat',
-      'model': 'LongCat-Flash-Chat',
-      'is_vip': false,
-      'type': 'chat',
-      'mime_support': 'image/*',
-      'max_files': 1,
-      'stream': true,
-    },
-    {
-      'bot_id': 'longcat-25-preview',
-      'name': 'LongCat 2.5',
-      'service': 'longcat',
-      'model': 'LongCat-2.5-Preview',
-      'is_vip': false,
-      'type': 'chat',
-      'mime_support': 'image/*',
-      'max_files': 1,
-      'stream': true,
-    },
-    {
-      'bot_id': 'longcat-20',
-      'name': 'LongCat 2.0',
-      'service': 'longcat',
-      'model': 'LongCat-2.0',
-      'is_vip': false,
-      'type': 'chat',
-      'mime_support': 'image/*',
-      'max_files': 1,
-      'stream': true,
-    },
+    {'bot_id': 'auto', 'name': 'Auto (live)', 'model': 'auto'},
+    {'bot_id': 'gpt4o', 'name': 'GPT-4o', 'model': 'gpt4o'},
+    {'bot_id': 'gpt5', 'name': 'GPT-5', 'model': 'gpt5'},
+    {'bot_id': 'claude45', 'name': 'Claude 4.5', 'model': 'claude45'},
+    {'bot_id': 'gemini3', 'name': 'Gemini 3', 'model': 'gemini3'},
+    {'bot_id': 'grok41', 'name': 'Grok 4.1', 'model': 'grok41'},
+    {'bot_id': 'deepseek', 'name': 'DeepSeek R1', 'model': 'deepseek'},
   ];
 
-  String _apiKey = '';
-  String _mode = 'website'; // website | apikey
-  LongcatWebService? _web;
+  final _uuid = const Uuid();
+  final _rand = Random();
+  late String _uid = _uuid.v4();
+  late String _sign = _convoSign();
+  int _turns = 0;
+
   bool _cancelFlag = false;
   http.Client? _client;
 
-  void setKey(String key) => _apiKey = key.trim();
-  void setMode(String mode) => _mode = mode;
-  String get mode => _mode;
-  void attachWeb(LongcatWebService web) => _web = web;
+  String _convoSign() => '${_uid}_${DateTime.now().millisecondsSinceEpoch}';
 
-  LongcatWebService get _w {
-    final w = _web;
-    if (w == null) throw Exception('AI backend not ready yet.');
-    return w;
+  Map<String, dynamic> _common(Map<String, dynamic> o) {
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    o['gp_token'] = '';
+    o['firebase_uid'] = '';
+    o['sign'] = '$ts${10000 + _rand.nextInt(90000)}';
+    return o;
   }
 
-  Map<String, String> get _headers => {
-        'Authorization': 'Bearer $_apiKey',
-        'Content-Type': 'application/json',
+  /// AES-128-CBC/PKCS7 encrypt JSON → Base64 NO_WRAP. Pure — unit tested.
+  static String aesEncrypt(String json) {
+    final e = enc.Encrypter(enc.AES(enc.Key.fromUtf8(_key), mode: enc.AESMode.cbc));
+    return e.encrypt(json, iv: enc.IV.fromUtf8(_iv)).base64;
+  }
+
+  /// Reverse of [aesEncrypt]. Pure — unit tested.
+  static String aesDecrypt(String blob) {
+    final e = enc.Encrypter(enc.AES(enc.Key.fromUtf8(_key), mode: enc.AESMode.cbc));
+    return e.decrypt(enc.Encrypted.fromBase64(blob.trim()), iv: enc.IV.fromUtf8(_iv));
+  }
+
+  Map<String, String> _form(String jsonBody) => {
+        'pkg': _pkg,
+        'version': _ver,
+        'modetype': '1',
+        'data': aesEncrypt(jsonBody),
       };
 
-  /// No handshake needed; readiness is checked per request so the
-  /// app shell (calendar, reminders) works even before setup.
+  Future<http.StreamedResponse> _post(
+      String endpoint, Map<String, dynamic> body) async {
+    _client?.close();
+    _client = http.Client();
+    final req = http.Request('POST', Uri.parse('$_base$endpoint'))
+      ..headers.addAll({
+        'User-Agent': 'okhttp/4.12.4',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'text/event-stream,application/json',
+      })
+      ..bodyFields = _form(jsonEncode(body));
+    return _client!.send(req).timeout(const Duration(seconds: 30));
+  }
+
+  Future<Map<String, dynamic>> _postJson(
+      String endpoint, Map<String, dynamic> body) async {
+    final resp = await _post(endpoint, body);
+    final raw = await resp.stream.bytesToString();
+    if (resp.statusCode != 200) {
+      throw Exception('AI error ${resp.statusCode}. Please retry.');
+    }
+    final outer = jsonDecode(aesDecrypt(raw)) as Map<String, dynamic>;
+    if (outer['code'] != 200) {
+      throw Exception('AI error ${outer['code']}: ${outer['message'] ?? 'unknown'}.');
+    }
+    final data = outer['data'];
+    return data is String ? jsonDecode(data) as Map<String, dynamic> : data as Map<String, dynamic>;
+  }
+
   Future<void> auth() async {
-    if (_mode == 'website') {
-      await _w.ensureReady();
-    }
+    _uid = _uuid.v4();
+    newChat();
   }
 
-  Future<List<Map<String, dynamic>>> fetchBots() async =>
-      _bots.map((b) => Map<String, dynamic>.from(b)).toList();
-
-  /// Ping the API to validate the stored key. Returns null when OK,
-  /// otherwise a human-readable error.
-  Future<String?> testKey(String key) async {
-    try {
-      final r = await http
-          .get(Uri.parse('$_base/models'), headers: {
-            'Authorization': 'Bearer ${key.trim()}',
+  Future<List<Map<String, dynamic>>> fetchBots() async => _bots
+      .map((b) => {
+            'bot_id': b['bot_id'],
+            'name': b['name'],
+            'service': 'openchat',
+            'model': b['model'],
+            'is_vip': false,
+            'type': 'chat',
+            'mime_support': 'image/*',
+            'max_files': 1,
+            'stream': true,
           })
-          .timeout(const Duration(seconds: 20));
-      if (r.statusCode == 200) return null;
-      if (r.statusCode == 401) return 'Invalid API key.';
-      return 'Server returned ${r.statusCode}.';
-    } on TimeoutException {
-      return 'Timed out — check your connection.';
-    } catch (e) {
-      return 'Could not reach the API: $e';
-    }
-  }
+      .toList();
 
-  /// Split our internal [SYSTEM]/[USER] wrapper into proper roles.
-  /// Returns (system, user).
-  (String, String) splitPrompt(String message) {
-    if (!message.contains('[SYSTEM]')) return ('', message);
+  /// Flatten our internal [SYSTEM]/[USER] wrapper into plain prompt text.
+  String toPrompt(String message) {
+    if (!message.contains('[SYSTEM]')) return message;
     final sysMatch =
         RegExp(r'\[SYSTEM\]\s*(.*?)\s*\[/SYSTEM\]', dotAll: true).firstMatch(message);
     final userMatch =
         RegExp(r'\[USER\]\s*(.*)', dotAll: true).firstMatch(message);
-    return (
-      sysMatch?.group(1)?.trim() ?? '',
-      userMatch?.group(1)?.trim() ?? message,
-    );
+    final sys = sysMatch?.group(1)?.trim() ?? '';
+    final user = userMatch?.group(1)?.trim() ?? message;
+    if (sys.isEmpty) return user;
+    return '$sys\n\nUser message: $user';
   }
 
-  /// Calendar extraction wants fast, deterministic output.
-  bool _thinkingFor(String model) => model == 'LongCat-2.5-Preview';
+  /// Parse one SSE `event:`/`data:` block into streamed text.
+  /// Returns '' for non-answer chunks. Pure — unit tested.
+  static String parseSseBlock(String event, String dataB64) {
+    String outer;
+    try {
+      outer = aesDecrypt(dataB64.split(RegExp(r'\s')).firstWhere((s) => s.isNotEmpty));
+    } catch (_) {
+      return '';
+    }
+    Map<String, dynamic> o;
+    try {
+      o = jsonDecode(outer) as Map<String, dynamic>;
+    } catch (_) {
+      return '';
+    }
+    if (event == 'error') {
+      throw Exception('AI error: ${o['message'] ?? 'unknown'}.');
+    }
+    if (event != 'message') return '';
+    final inner = o['data'];
+    final m = inner is String ? jsonDecode(inner) as Map<String, dynamic> : inner as Map<String, dynamic>?;
+    if (m == null) return '';
+    if (m['block_name'] != 'final_answer') return '';
+    return m['content']?.toString() ?? '';
+  }
 
   Stream<String> sendMessage({
     required String message,
@@ -128,44 +164,12 @@ class ApiService {
     String? chatId,
     File? imageFile,
   }) async* {
-    if (_mode == 'website') {
-      List<int>? bytes;
-      if (imageFile != null) {
-        try {
-          bytes = await imageFile.readAsBytes();
-        } catch (_) {}
-      }
-      final (system, user) = splitPrompt(message);
-      final prompt = system.isEmpty ? user : '$system\n\nUser message: $user';
-      final ext = imageFile?.path.split('.').last.toLowerCase() ?? 'jpg';
-      yield* _w.send(
-        message: prompt,
-        imageBytes: bytes,
-        imageName: imageFile != null ? imageFile.path.split('/').last : 'photo.jpg',
-        imageMime: ext == 'png'
-            ? 'image/png'
-            : ext == 'webp'
-                ? 'image/webp'
-                : 'image/jpeg',
-      );
-      return;
-    }
-    if (_apiKey.isEmpty) {
-      throw Exception(
-          'Add your LongCat API key in Settings → AI Model to start chatting.');
-    }
     _cancelFlag = false;
-    _client?.close();
-    _client = http.Client();
+    var prompt = toPrompt(message);
 
-    String useModel = model.isNotEmpty ? model : 'LongCat-Flash-Chat';
-    final (system, user) = splitPrompt(message);
-    final messages = <Map<String, dynamic>>[
-      if (system.isNotEmpty) {'role': 'system', 'content': system},
-    ];
     if (imageFile != null) {
       final bytes = await imageFile.readAsBytes();
-      if (bytes.length > 8 * 1024 * 1024) {
+      if (bytes.length > 12 * 1024 * 1024) {
         throw Exception('That photo is too large — please pick a smaller image.');
       }
       final ext = imageFile.path.split('.').last.toLowerCase();
@@ -174,96 +178,144 @@ class ApiService {
           : ext == 'webp'
               ? 'image/webp'
               : 'image/jpeg';
-      useModel = 'LongCat-2.5-Preview'; // flagship model for image input
-      messages.add({
-        'role': 'user',
-        'content': [
-          {'type': 'text', 'text': user},
-          {
-            'type': 'image_url',
-            'image_url': {'url': 'data:$mime;base64,${base64Encode(bytes)}'}
-          },
-        ],
-      });
-    } else {
-      messages.add({'role': 'user', 'content': user});
+      final name = imageFile.path.split('/').last;
+      prompt = await _visionDescribe(bytes, name, mime, prompt);
     }
 
-    final req = http.Request('POST', Uri.parse('$_base/chat/completions'))
-      ..headers.addAll(_headers)
-      ..body = jsonEncode({
-        'model': useModel,
-        'messages': messages,
-        'stream': true,
-        'temperature': 0.3,
-        'thinking': {'type': _thinkingFor(useModel) ? 'enabled' : 'disabled'},
-      });
+    final idArgs = _turns == 0 ? <String, dynamic>{} : {'id': 0};
+    _turns++;
 
-    http.StreamedResponse resp;
-    try {
-      resp = await _client!.send(req).timeout(const Duration(seconds: 30));
-    } on TimeoutException {
-      throw Exception('Timed out reaching the AI. Check your connection.');
+    if (botId == 'deepseek') {
+      final d = await _postJson(
+          'chat/question-dp',
+          _common({
+            'question': prompt,
+            'conversation_sign': _sign,
+            ...idArgs,
+          }));
+      final text = d['content']?.toString() ?? d['msg']?.toString() ?? '';
+      if (text.isNotEmpty) yield text;
+      return;
     }
-    if (resp.statusCode == 401) {
-      throw Exception('Invalid API key — update it in Settings → AI Model.');
+
+    if (botId != 'auto') {
+      final d = await _postJson(
+          'chat/common_question',
+          _common({
+            'uuid': _uid,
+            'conversation_sign': _sign,
+            'timestamp': DateTime.now().millisecondsSinceEpoch,
+            'question': prompt,
+            'lang': 'en',
+            'model': model.isNotEmpty ? model : 'auto',
+            'length': 'auto',
+            'style': 'auto',
+            ...idArgs,
+          }));
+      final text = d['content']?.toString() ?? d['msg']?.toString() ?? '';
+      if (text.isNotEmpty) yield text;
+      return;
     }
-    if (resp.statusCode == 429) {
-      throw Exception('Rate limited — wait a minute and retry.');
-    }
+
+    // Streaming main chat.
+    final resp = await _post(
+        'aq/chat',
+        _common({
+          'conversation_sign': _sign,
+          'msg_type': 0,
+          'msg': prompt,
+          'language': 'en',
+          ...idArgs,
+        }));
     if (resp.statusCode != 200) {
-      final body = await resp.stream.bytesToString();
-      throw Exception('AI error ${resp.statusCode}: ${_short(body)}');
+      throw Exception('AI error ${resp.statusCode}. Please retry.');
     }
-
+    var event = '';
+    var data = '';
+    var gotAny = false;
     final lines =
         resp.stream.transform(utf8.decoder).transform(const LineSplitter());
     await for (final line in lines) {
       if (_cancelFlag) return;
-      var raw = line.trim();
-      if (raw.isEmpty || !raw.startsWith('data:')) continue;
-      raw = raw.substring(5).trim();
-      if (raw == '[DONE]') return;
-      final chunk = parseSseChunk(raw);
-      if (chunk.isNotEmpty) yield chunk;
+      final t = line.trim();
+      if (t.isEmpty) {
+        if (data.isNotEmpty) {
+          final chunk = parseSseBlock(event, data);
+          if (chunk.isNotEmpty) {
+            gotAny = true;
+            yield chunk;
+          }
+        }
+        event = '';
+        data = '';
+        continue;
+      }
+      if (t.startsWith('event:')) {
+        event = t.substring(6).trim().split(RegExp(r'\s')).first;
+      } else if (t.startsWith('data:')) {
+        final piece = t.substring(5).trim();
+        data = data.isEmpty ? piece : '$data$piece';
+      }
     }
+    if (data.isNotEmpty) {
+      final chunk = parseSseBlock(event, data);
+      if (chunk.isNotEmpty) {
+        gotAny = true;
+        yield chunk;
+      }
+    }
+    if (!gotAny) throw Exception('Empty reply from AI. Please retry.');
   }
 
-  /// Parse one SSE `data:` payload into text. Pure — unit tested.
-  static String parseSseChunk(String raw) {
-    try {
-      final j = jsonDecode(raw) as Map<String, dynamic>;
-      final choices = j['choices'] as List?;
-      final delta = (choices?.firstOrNull as Map?)?['delta'] as Map?;
-      return delta?['content']?.toString() ?? '';
-    } catch (_) {
-      return '';
-    }
-  }
+  /// Vision pipeline: upload → analyze → description text.
+  Future<String> _visionDescribe(
+      List<int> bytes, String name, String mime, String instruction) async {
+    final up = await _postJson(
+        'chat/file/get_upload_url', _common({'filenames': [name]}));
+    final urls = (up['url_list'] as List?) ?? [];
+    if (urls.isEmpty) throw Exception('Upload failed. Please retry.');
+    final item = urls.first as Map<String, dynamic>;
+    final putUrl = item['url']?.toString() ?? '';
+    final s3Url = item['s3_url']?.toString() ?? '';
+    if (putUrl.isEmpty || s3Url.isEmpty) throw Exception('Upload failed. Please retry.');
 
-  String _short(String body, [int max = 200]) {
-    try {
-      final j = jsonDecode(body) as Map?;
-      final err = j?['error'] as Map?;
-      final msg = err?['message']?.toString() ?? body;
-      return msg.length <= max ? msg : msg.substring(0, max);
-    } catch (_) {
-      return body.length <= max ? body : body.substring(0, max);
+    final put = await http.put(Uri.parse(putUrl),
+        headers: {'Content-Type': mime, 'x-amz-acl': 'public-read'}, body: bytes);
+    if (put.statusCode != 200) {
+      throw Exception('Upload failed (HTTP ${put.statusCode}). Please retry.');
     }
+
+    await _postJson(
+        'chat/images/analysis',
+        _common({
+          'conversation_sign': _sign,
+          'type': '1',
+          'text': instruction.isNotEmpty ? instruction : 'Describe this image in detail.',
+          'img_url': s3Url,
+        }));
+    for (var i = 0; i < 12; i++) {
+      await Future.delayed(const Duration(seconds: 5));
+      if (_cancelFlag) throw Exception('Stopped.');
+      final p = await _postJson('chat/images/analysis_pull',
+          _common({'conversation_sign': _sign, 'type': '1'}));
+      final content = p['content']?.toString() ?? '';
+      if (content.isNotEmpty) return 'The timetable image shows:\n$content';
+    }
+    throw Exception('Image analysis timed out. Please describe it in text.');
   }
 
   void stopStreaming() {
     _cancelFlag = true;
     _client?.close();
     _client = null;
-    _web?.stop();
   }
 
   void newChat() {
-    _web?.newChat();
+    _sign = _convoSign();
+    _turns = 0;
   }
 
-  String? get currentChatId => null;
+  String? get currentChatId => _sign;
   bool get isAuthed => true;
 
   Future<List<Map<String, dynamic>>> getConversations({int page = 1}) async => [];
