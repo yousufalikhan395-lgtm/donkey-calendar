@@ -12,6 +12,8 @@ import 'package:webview_flutter/webview_flutter.dart';
 /// assistant streams into the page, ~10s answers, guest 429s when over quota.
 class LongcatWebService {
   static const homeUrl = 'https://longcat.ai/chat/';
+  // Bump on every behavior change; logged at boot to prove which build runs.
+  static const buildTag = 'web7-navguard';
 
   static const _limitMarkers = [
     'Too many requests',
@@ -62,6 +64,7 @@ class LongcatWebService {
   Future<void> ensureReady() async {
     if (!_freshDone) {
       _freshDone = true;
+      _log('boot build=$buildTag');
       await freshIdentity();
     }
     for (var attempt = 0; attempt < 3; attempt++) {
@@ -128,6 +131,16 @@ class LongcatWebService {
     }
 
     await _calmToggles();
+    // Hard ceiling: no single send may run past 75s without a verdict.
+    try {
+      await _doSend(message).timeout(const Duration(seconds: 75));
+    } on TimeoutException {
+      throw Exception(
+          'Send timed out at step (${_diag.join(' → ')}). Please retry.');
+    }
+  }
+
+  Stream<String> _doSend(String message) async* {
     for (var attempt = 0; attempt < 2; attempt++) {
       final step = await _submitVerified(message);
       if (!step) {
@@ -210,6 +223,7 @@ class LongcatWebService {
     _log('text set: $setRes');
     if (setRes != 'TEXT_YES') return false;
 
+    _log('dispatching Enter');
     await _evalStr('''
 (() => {
   const ed = document.querySelector('[contenteditable=true]');
@@ -222,6 +236,7 @@ class LongcatWebService {
 })()
 ''');
     await Future.delayed(const Duration(seconds: 3));
+    _log('confirming send (enter path)');
     if (await _sendConfirmed(tailJson)) {
       _diag.add('via:enter');
       return true;
