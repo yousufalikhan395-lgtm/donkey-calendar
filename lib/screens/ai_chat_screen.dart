@@ -429,26 +429,29 @@ class _AiChatScreenState extends State<AiChatScreen> {
                               },
                             ),
                           if (msg.parseError != null)
-                            Container(
-                              margin: const EdgeInsets.only(bottom: 8, right: 48),
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFBE2D9),
-                                borderRadius: BorderRadius.circular(16),
+                            GestureDetector(
+                              onTap: () => _copy(msg.parseError!),
+                              child: Container(
+                                margin: const EdgeInsets.only(bottom: 8, right: 48),
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFFBE2D9),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: Row(children: [
+                                  Expanded(
+                                    child: Text(msg.parseError!,
+                                        style: const TextStyle(
+                                            fontFamily: 'Inter',
+                                            fontSize: 13,
+                                            color: Color(0xFF9A3B22))),
+                                  ),
+                                  TextButton(
+                                    onPressed: _streaming ? null : _retry,
+                                    child: const Text('Retry'),
+                                  ),
+                                ]),
                               ),
-                              child: Row(children: [
-                                Expanded(
-                                  child: Text(msg.parseError!,
-                                      style: const TextStyle(
-                                          fontFamily: 'Inter',
-                                          fontSize: 13,
-                                          color: Color(0xFF9A3B22))),
-                                ),
-                                TextButton(
-                                  onPressed: _streaming ? null : _retry,
-                                  child: const Text('Retry'),
-                                ),
-                              ]),
                             ),
                         ],
                       );
