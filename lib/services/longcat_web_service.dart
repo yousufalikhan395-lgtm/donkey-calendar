@@ -133,7 +133,10 @@ class LongcatWebService {
     await _calmToggles();
     // Hard ceiling: no single send may run past 75s without a verdict.
     try {
-      await _doSend(message).timeout(const Duration(seconds: 75));
+      await for (final chunk
+          in _doSend(message).timeout(const Duration(seconds: 75))) {
+        yield chunk;
+      }
     } on TimeoutException {
       throw Exception(
           'Send timed out at step (${_diag.join(' → ')}). Please retry.');
