@@ -60,6 +60,7 @@ class _AppShellState extends State<_AppShell> {
   void initState() {
     super.initState();
     _web.attach(_webCtrl);
+    _web.attachConsoleBridge(_webCtrl);
     _api.attachWeb(_web);
     _boot();
   }

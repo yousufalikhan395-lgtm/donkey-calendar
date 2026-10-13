@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 /// Drives longcat.ai/chat (guest, no login) inside a hidden WebView.
@@ -26,6 +27,19 @@ class LongcatWebService {
   bool _freshDone = false;
 
   void attach(WebViewController controller) => _controller = controller;
+
+  void _log(String msg) {
+    debugPrint('[longcat-web] $msg');
+  }
+
+  /// Forward page console messages to logcat (diagnostics).
+  void attachConsoleBridge(WebViewController controller) {
+    try {
+      controller.setOnConsoleMessage((msg) {
+        debugPrint('[longcat-page:${msg.level.name}] ${msg.message}');
+      });
+    } catch (_) {}
+  }
 
   WebViewController get _c {
     final c = _controller;
@@ -102,7 +116,9 @@ class LongcatWebService {
   }) async* {
     _cancelFlag = false;
     _diag.clear();
+    _log('send start len=${message.length}');
     await ensureReady();
+    _log('ready');
 
     if (imageBytes != null) {
       await _uploadImage(imageBytes, imageName, imageMime);
@@ -189,6 +205,7 @@ class LongcatWebService {
 })()
 ''');
     _diag.add('text:$setRes');
+    _log('text set: $setRes');
     if (setRes != 'TEXT_YES') return false;
 
     await _evalStr('''
@@ -232,6 +249,7 @@ class LongcatWebService {
 })()
 ''');
     _diag.add('click:$clickRes');
+    _log('send click: $clickRes');
     await Future.delayed(const Duration(seconds: 3));
     if (await _sendConfirmed(tailJson)) {
       _diag.add('via:click');
@@ -261,6 +279,7 @@ class LongcatWebService {
 })()
 ''');
     _diag.add('confirm:$res');
+    _log('send confirm: $res');
     return res == 'BOX_EMPTY' || res == 'BUBBLE_FOUND';
   }
 
@@ -278,7 +297,10 @@ class LongcatWebService {
       final full = await _evalStr(
           '(() => document.body ? document.body.innerText : "")()');
       final limit = _limitMarkers.any(full.contains);
-      if (limit) throw _LimitHit();
+      if (limit) {
+        _log('LIMIT markers hit');
+        throw _LimitHit();
+      }
       // Assistant text = page text beyond what existed before sending.
       final text = full.length > _baselineLen
           ? full.substring(_baselineLen).trim()
