@@ -48,9 +48,11 @@ class LongcatWebService {
   }
   // ignore: unnecessary_null_comparison
 
-  Future<String> _evalStr(String js) async {
+  Future<String> _evalStr(String js,
+      {Duration timeout = const Duration(seconds: 12)}) async {
     try {
-      final r = await _c.runJavaScriptReturningResult(js);
+      final r =
+          await _c.runJavaScriptReturningResult(js).timeout(timeout);
       return r.toString();
     } catch (_) {
       return '';
@@ -255,6 +257,14 @@ class LongcatWebService {
       _diag.add('via:click');
       return true;
     }
+    // Last chance: the page may have navigated on submit and still be
+    // loading — our bubble survives navigation, so check once more late.
+    _log('send re-check after navigation settle');
+    await Future.delayed(const Duration(seconds: 6));
+    if (await _sendConfirmed(tailJson)) {
+      _diag.add('via:late-confirm');
+      return true;
+    }
     _diag.add('confirm:no');
     return false;
   }
@@ -398,10 +408,6 @@ class LongcatWebService {
     try {
       await _evalStr(
           "(() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} return 'OK'; })()");
-    } catch (_) {}
-    try {
-      await _evalStr(
-          "(() => { try { if (indexedDB.databases) indexedDB.databases().then(ds => ds.forEach(d => { try { indexedDB.deleteDatabase(d.name); } catch (e) {} })); } catch (e) {} return 'OK'; })()");
     } catch (_) {}
   }
 
